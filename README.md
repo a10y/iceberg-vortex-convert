@@ -15,8 +15,12 @@ mvn clean package
 
 ## running
 
+This requires that you have the `vx` CLI tool installed. You can build this from Vortex source directly:
+
+
 ```
-java -jar ./target/vortex-table-maker-1.0-SNAPSHOT-jar-with-dependencies.jar --help
+# add the vx source build output to our PATH
+PATH=/path/to/vortex/target/release:$PATH java -jar ./target/vortex-table-maker-1.0-SNAPSHOT-jar-with-dependencies.jar --help
 ```
 
 An example with all arguments:
