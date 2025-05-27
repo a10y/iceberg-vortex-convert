@@ -1,21 +1,23 @@
 package dev.vortex.iceberg;
 
+import dev.vortex.iceberg.tasks.RewriteTable;
 import java.util.List;
 import java.util.concurrent.Callable;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.iceberg.*;
-import org.apache.iceberg.catalog.Namespace;
 import org.apache.iceberg.catalog.TableIdentifier;
 import org.apache.iceberg.hadoop.HadoopCatalog;
-import org.apache.iceberg.hadoop.HadoopFileIO;
-import org.apache.iceberg.io.FileIO;
+import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import picocli.CommandLine;
 import picocli.CommandLine.Command;
 import picocli.CommandLine.Option;
+import picocli.CommandLine.Parameters;
 
-@Command(name = "table-maker", mixinStandardHelpOptions = true)
+@Command(name = "iceberg-vortex-convert", mixinStandardHelpOptions = true)
 public final class TableMaker implements Callable<Integer> {
+
+  static final Logger log = LoggerFactory.getLogger(TableMaker.class);
 
   @Option(
       names = {"--access-key"},
@@ -29,7 +31,9 @@ public final class TableMaker implements Callable<Integer> {
       description = "Iceberg warehouse location")
   private String warehouse;
 
-  @Option(names = "--tables", required = true, defaultValue = "call_center")
+  @Parameters(
+      description = "The Iceberg tables to convert into Vortex",
+      defaultValue = "call_center")
   private List<String> tables;
 
   @Override
@@ -37,13 +41,12 @@ public final class TableMaker implements Callable<Integer> {
     Configuration conf = new Configuration();
     conf.set("fs.azure.account.key", accessKey);
 
-    LoggerFactory.getLogger(TableMaker.class).info("Using warehouse: " + warehouse);
+    log.info("Using warehouse {}", warehouse);
 
-    try (HadoopCatalog catalog = new HadoopCatalog(conf, warehouse);
-        FileIO fileIO = new HadoopFileIO(conf)) {
+    try (HadoopCatalog catalog = new HadoopCatalog(conf, warehouse)) {
       for (String tableName : tables) {
-        Table table = catalog.loadTable(TableIdentifier.of(Namespace.empty(), tableName));
-        RewriteTable.of(catalog, table, fileIO).run();
+        Table table = catalog.loadTable(TableIdentifier.of(tableName));
+        RewriteTable.of(tableName, catalog, table).run();
       }
     }
 

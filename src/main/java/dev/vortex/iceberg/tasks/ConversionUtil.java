@@ -1,4 +1,4 @@
-package dev.vortex.iceberg;
+package dev.vortex.iceberg.tasks;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
