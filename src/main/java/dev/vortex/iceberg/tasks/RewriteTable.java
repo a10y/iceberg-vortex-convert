@@ -1,5 +1,13 @@
 package dev.vortex.iceberg.tasks;
 
+import com.google.common.collect.ImmutableList;
+import com.google.common.util.concurrent.Futures;
+import java.util.List;
+import java.util.concurrent.Callable;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.stream.Collectors;
 import org.apache.iceberg.*;
 import org.apache.iceberg.catalog.Catalog;
 import org.apache.iceberg.catalog.Namespace;
@@ -37,26 +45,28 @@ public final class RewriteTable implements Runnable {
             true);
     AppendFiles append = createTable.newAppend();
 
-    // Traverse all data files reachable from the current snapshot, convert them to Vortex
-    // and write them into a new Vortex table.
-    table
-        .currentSnapshot()
-        .addedDataFiles(table.io())
-        .forEach(
-            dataFile -> {
-              log.info("Rewriting data file: {}", dataFile.location());
-              try {
-                DataFile newDataFile =
-                    RewriteDataFile.of(
-                            table.io(), dataFile, table.spec(), createTable.table().location())
-                        .call();
-                append.appendFile(newDataFile);
-              } catch (Exception e) {
-                throw new RuntimeException("Failed rewriting data file " + dataFile.location(), e);
-              }
-            });
+    // ForkJoin to rewrite in parallel.
+    ExecutorService executor = Executors.newFixedThreadPool(4);
 
-    append.commit();
-    createTable.commitTransaction();
+    List<Callable<DataFile>> rewriteTasks =
+        ImmutableList.copyOf(table.currentSnapshot().addedDataFiles(table.io())).stream()
+            .map(
+                dataFile ->
+                    RewriteDataFile.of(
+                        table.io(), dataFile, table.spec(), createTable.table().location()))
+            .collect(Collectors.toList());
+
+    try {
+      log.info("Begin {} parallel rewrite tasks", rewriteTasks.size());
+      List<Future<DataFile>> dataFiles = executor.invokeAll(rewriteTasks);
+      dataFiles.forEach(fut -> append.appendFile(Futures.getUnchecked(fut)));
+
+      append.commit();
+      createTable.commitTransaction();
+    } catch (InterruptedException e) {
+      throw new RuntimeException("Interrupted invoking rewrite futures for table " + tableName, e);
+    }
+
+    executor.shutdown();
   }
 }

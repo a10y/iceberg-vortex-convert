@@ -1,5 +1,6 @@
 package dev.vortex.iceberg.tasks;
 
+import com.google.common.io.MoreFiles;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.net.URI;
@@ -14,14 +15,28 @@ import org.apache.iceberg.PartitionSpec;
 import org.apache.iceberg.io.FileIO;
 import org.apache.iceberg.io.OutputFile;
 import org.apache.iceberg.io.SeekableInputStream;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 public final class RewriteDataFile implements Callable<DataFile> {
-
+  static final Logger log = LoggerFactory.getLogger(RewriteDataFile.class);
   static final Path TEMP_DIR;
 
   static {
     try {
       TEMP_DIR = java.nio.file.Files.createTempDirectory("rewrite");
+
+      Runtime.getRuntime()
+          .addShutdownHook(
+              new Thread(
+                  () -> {
+                    try {
+                      MoreFiles.deleteRecursively(TEMP_DIR);
+                    } catch (IOException e) {
+                      log.warn("Failed to delete temp dir on exit", e);
+                    }
+                  }));
+
     } catch (IOException e) {
       throw new RuntimeException("failed creating temp dir", e);
     }
@@ -47,20 +62,27 @@ public final class RewriteDataFile implements Callable<DataFile> {
 
   @Override
   public DataFile call() throws Exception {
+    log.info("Rewriting data file: {}", dataFile.location());
     URI uri = URI.create(dataFile.location());
     String fileName = Paths.get(uri.getPath()).getFileName().toString();
-    Path file = TEMP_DIR.resolve(fileName);
+    Path parquetFile = TEMP_DIR.resolve(fileName);
 
     try (SeekableInputStream stream = fileIO.newInputFile(dataFile).newStream()) {
-      Files.copy(stream, file);
+      Files.copy(stream, parquetFile);
     }
 
-    Path vortexFile = ConversionUtil.parquetToVortex(file);
+    Path vortexFile = ConversionUtil.parquetToVortex(parquetFile);
+
     String location = resolveChild(outputLocation, "data/" + vortexFile.getFileName().toString());
     OutputFile outputFile = fileIO.newOutputFile(location);
     try (OutputStream outputStream = outputFile.createOrOverwrite()) {
       Files.copy(vortexFile, outputStream);
     }
+
+    // Cleanup our space usage.
+    Files.delete(parquetFile);
+    Files.delete(vortexFile);
+
     return DataFiles.builder(partitionSpec)
         .withInputFile(outputFile.toInputFile())
         .withPartition(dataFile.partition())
